@@ -25,6 +25,7 @@ jobs:
           SCRIPT_URL: ${{ secrets.FOOD_SCRIPT_URL }}
           ADMIN_PIN:  ${{ secrets.FOOD_ADMIN_PIN }}
         run: |
+          cp hellofresh_vote_v3.html index.html
           sed -i "s|YOUR_SCRIPT_URL_HERE|${SCRIPT_URL}|g" index.html
           sed -i "s|YOUR_ADMIN_PIN_HERE|${ADMIN_PIN}|g"   index.html
           echo "✓ Secrets injected"
