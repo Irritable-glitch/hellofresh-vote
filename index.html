@@ -38,6 +38,11 @@ h1,h2,h3,h4 { font-family: 'DM Serif Display', serif; }
 .screen.show { display: flex; flex-direction: column; }
 #screen-login { background: var(--night); align-items: center; justify-content: center; padding: 2rem; }
 
+/* ── PAGES (round tabs) ── */
+.page { display: none; flex: 1; animation: fadeIn 0.2s ease; }
+.page.show { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
 /* ── LOGIN ── */
 .login-card { background: var(--charcoal); border-radius: 18px; padding: 2.5rem; width: min(420px,100%); border: 1px solid var(--stone); }
 .login-logo { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 2rem; }
@@ -516,6 +521,7 @@ function launchApp() {
   showScreen('app');
   loadSheet();
   window._sync = setInterval(loadSheet, 15000);
+  tickTimers();  // run immediately so timer shows before first interval
   setInterval(tickTimers, 1000);
 }
 
@@ -567,9 +573,10 @@ async function loadSheet() {
     (stR.values||[]).forEach(([k,v]) => { if(k) sm[k]=v; });
     app.r2open = sm.r2open === 'true';
     app.r3open = sm.r3open === 'true';
-    app.r1dl   = sm.r1dl  || null;
-    app.r2dl   = sm.r2dl  || null;
-    app.r3dl   = sm.r3dl  || null;
+    // Only update deadlines if sheet has a real value — never overwrite with empty
+    if (sm.r1dl && sm.r1dl.length > 5) app.r1dl = sm.r1dl;
+    if (sm.r2dl && sm.r2dl.length > 5) app.r2dl = sm.r2dl;
+    if (sm.r3dl && sm.r3dl.length > 5) app.r3dl = sm.r3dl;
     app.nextId = parseInt(sm.nextId||'1');
     try { const sv = JSON.parse(sm.voters||'[]'); if(sv.length){ cfg.voters=sv; saveLocalCfg(); } } catch{}
 
@@ -603,6 +610,7 @@ async function loadSheet() {
 
     setSyncStatus('ok','Synced');
     updateUI();
+    tickTimers();  // refresh timer display after every sync
   } catch(e) {
     console.error(e);
     setSyncStatus('err','Sync failed — check Sheet ID & API key');
@@ -820,6 +828,8 @@ function goRound(n) {
     if(pg) pg.classList.toggle('show',i===n);
     if(tb) tb.classList.toggle('active',i===n);
   });
+  // Scroll to top of content on every tab switch
+  window.scrollTo({ top: 0, behavior: 'smooth' });
   if(n===2) renderR2();
   if(n===3) renderR3();
   if(n===4) renderHistory();
@@ -832,9 +842,14 @@ function setCat(c) { catFilter=c; renderR1(); }
 // TIMERS
 // ═══════════════════════════════════════════════════════════
 function tickTimers() {
-  document.getElementById('cd1').innerHTML=cdHTML(app.r1dl,'⏰ Round 1 closed');
-  document.getElementById('cd2').innerHTML=cdHTML(app.r2dl,'⏰ Round 2 closed');
-  document.getElementById('cd3').innerHTML=cdHTML(app.r3dl,'🏆 Voting closed — winners confirmed!');
+  // Safe update — elements may be hidden but always exist in DOM
+  const safe = (id, iso, msg) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = cdHTML(iso, msg);
+  };
+  safe('cd1', app.r1dl, '⏰ Round 1 closed');
+  safe('cd2', app.r2dl, '⏰ Round 2 closed');
+  safe('cd3', app.r3dl, '🏆 Voting closed — winners confirmed!');
 }
 function cdHTML(iso,msg) {
   if(!iso) return '';
