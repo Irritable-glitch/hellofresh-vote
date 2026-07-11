@@ -633,9 +633,26 @@ async function loadSheet() {
       finalist2: r[8]==='true', finalist3: r[9]==='true',
     })).filter(r=>r.id&&r.name);
 
-    // If sheet has recipes, use those; otherwise fall back to scraped
     if (sheetRecipes.length) {
       app.recipes = sheetRecipes;
+      // Merge in any NEW recipes from recipes.json not already in the sheet
+      // (matched by HelloFresh URL, since ids can collide across scrapes)
+      if (app._scraped?.length) {
+        const existingUrls = new Set(sheetRecipes.map(r=>r.url).filter(Boolean));
+        const existingNames = new Set(sheetRecipes.map(r=>r.name.toLowerCase()));
+        let nextId = Math.max(0, ...sheetRecipes.map(r=>r.id)) + 1;
+        const newOnes = app._scraped.filter(r =>
+          !(r.url && existingUrls.has(r.url)) && !existingNames.has((r.name||'').toLowerCase())
+        );
+        if (newOnes.length) {
+          newOnes.forEach(r => { r.id = nextId++; r.finalist2 = false; r.finalist3 = false; });
+          app.recipes = [...sheetRecipes, ...newOnes];
+          app.nextId = nextId;
+          await writeAllRecipes();
+          await writeState();
+          toast(`${newOnes.length} new recipes added from recipes.json ✓`);
+        }
+      }
     } else if (app._scraped?.length) {
       // First run — push scraped recipes to sheet
       app.recipes = app._scraped;
@@ -766,9 +783,40 @@ function renderArchive() {
       </div>
       <div class="rcard-foot">
         <div class="vote-score" style="font-size:0.78rem;color:var(--sub)">👍 ${r.yesVotes} &nbsp; 👎 ${r.noVotes}</div>
+        ${isAdmin ? `<button onclick="restoreFromArchive(${r.id})" style="background:var(--green);color:white;border:none;border-radius:7px;padding:0.3rem 0.7rem;font-size:0.75rem;font-family:inherit;font-weight:600;cursor:pointer">↺ Give 2nd chance</button>` : ''}
       </div>
     </div>`;
   }).join('');
+}
+
+async function restoreFromArchive(recipeId) {
+  if (!isAdmin) return;
+  const idx = archive.findIndex(a => a.id === recipeId);
+  if (idx === -1) return;
+  const r = archive[idx];
+
+  // Remove from local archive array immediately for snappy UI
+  archive.splice(idx, 1);
+  renderArchive();
+  toast(`"${r.name}" restored to voting pool`);
+
+  // Clear its old votes so it gets a fresh start, then rewrite the Archive sheet
+  try {
+    app.r1v[recipeId] = {};
+    app.r2v[recipeId] = {};
+    app.r3v[recipeId] = {};
+    const rows = [['id','name','category','image','url','description','yesVotes','noVotes'],
+      ...archive.map(a=>[a.id,a.name,a.category,a.image,a.url,a.description||'',a.yesVotes,a.noVotes])];
+    await sheetWrite(`${SH.ARCHIVE}!A1`, rows);
+    // Clear this recipe's old vote rows so it starts fresh
+    const res = await sheetGet(`${SH.VOTES}!A1:E500`);
+    const voteRows = res.values||[];
+    for (let i=1;i<voteRows.length;i++){
+      if (voteRows[i][1]===String(recipeId)) {
+        await sheetWrite(`${SH.VOTES}!A${i+1}:E${i+1}`,[['','','','','']]);
+      }
+    }
+  } catch(e) { console.warn('Restore failed:', e); }
 }
 
 // ═══════════════════════════════════════════════════════════
