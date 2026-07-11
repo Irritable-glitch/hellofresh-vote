@@ -997,14 +997,31 @@ function renderAdminActions() {
     const d=new Date(); d.setDate(d.getDate()+3); app.r1dl=d.toISOString();
     await writeState(); tickTimers(); toast('Round 1 timer restarted'); closeAdmin();
   });
+  if(app.r1dl && new Date(app.r1dl)>Date.now()) add('⏹ Stop R1 timer now', async()=>{
+    if(!confirm('End Round 1 voting immediately?')) return;
+    app.r1dl=new Date().toISOString();
+    await writeState(); tickTimers(); toast('Round 1 timer stopped'); closeAdmin();
+  }, true);
+
   if(app.r2open) add('⏱ Restart R2 timer (2d)', async()=>{
     const d=new Date(); d.setDate(d.getDate()+2); app.r2dl=d.toISOString();
     await writeState(); tickTimers(); toast('Round 2 timer restarted'); closeAdmin();
   });
+  if(app.r2open && new Date(app.r2dl)>Date.now()) add('⏹ Stop R2 timer now', async()=>{
+    if(!confirm('End Round 2 voting immediately?')) return;
+    app.r2dl=new Date().toISOString();
+    await writeState(); tickTimers(); toast('Round 2 timer stopped'); closeAdmin();
+  }, true);
+
   if(app.r3open) add('⏱ Restart R3 timer (1d)', async()=>{
     const d=new Date(); d.setDate(d.getDate()+1); app.r3dl=d.toISOString();
     await writeState(); tickTimers(); toast('Round 3 timer restarted'); closeAdmin();
   });
+  if(app.r3open && new Date(app.r3dl)>Date.now()) add('⏹ Stop R3 timer now', async()=>{
+    if(!confirm('End Round 3 voting immediately? Winners will be finalized.')) return;
+    app.r3dl=new Date().toISOString();
+    await writeState(); tickTimers(); toast('Round 3 timer stopped — winners finalized'); closeAdmin();
+  }, true);
 
   add('↺ Reset All Votes', async()=>{
     if(!confirm('Reset all votes? Recipes stay.')) return;
@@ -1017,8 +1034,8 @@ function renderAdminActions() {
     goRound(1); toast('Votes reset'); closeAdmin();
   }, true);
 
-  add('🗑 Fresh Week (Clear All)', async()=>{
-    if(!confirm('Delete ALL recipes and votes for a fresh week?')) return;
+  add('🗑 Fresh Week — delete everything & start over', async()=>{
+    if(!confirm('This deletes ALL recipes, votes, and timers to start a brand new week from scratch. Continue?')) return;
     app.recipes=[]; app.r1v={}; app.r2v={}; app.r3v={};
     app.r2open=false; app.r3open=false; app.r1dl=null; app.r2dl=null; app.r3dl=null; app.nextId=1;
     await sheetWrite(`${SH.RECIPES}!A1:K500`,[['id','name','category','prepTime','difficulty','image','url','description','finalist2','finalist3','']]);
