@@ -410,6 +410,20 @@ h1,h2,h3,h4 { font-family: 'DM Serif Display', serif; }
 
     <div class="msec">
       <h4>Round Controls</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.6rem;margin-bottom:0.85rem">
+        <div class="mfield" style="margin-bottom:0">
+          <label>Round 1 days</label>
+          <input type="number" id="dur-r1" min="1" max="14" value="3" style="border:1.5px solid var(--rule);border-radius:8px;padding:0.4rem 0.6rem;font-size:0.85rem;font-family:inherit;outline:none;width:100%">
+        </div>
+        <div class="mfield" style="margin-bottom:0">
+          <label>Round 2 days</label>
+          <input type="number" id="dur-r2" min="1" max="14" value="2" style="border:1.5px solid var(--rule);border-radius:8px;padding:0.4rem 0.6rem;font-size:0.85rem;font-family:inherit;outline:none;width:100%">
+        </div>
+        <div class="mfield" style="margin-bottom:0">
+          <label>Round 3 days</label>
+          <input type="number" id="dur-r3" min="1" max="14" value="1" style="border:1.5px solid var(--rule);border-radius:8px;padding:0.4rem 0.6rem;font-size:0.85rem;font-family:inherit;outline:none;width:100%">
+        </div>
+      </div>
       <div class="admin-actions" id="round-actions"></div>
     </div>
     <hr>
@@ -962,10 +976,12 @@ function renderAdminActions() {
   const box=document.getElementById('round-actions');
   box.innerHTML='';
   const add=(label,fn,danger=false)=>{ const b=document.createElement('button'); b.className='aabtn'+(danger?' danger':''); b.textContent=label; b.onclick=fn; box.appendChild(b); };
+  const durDays=(id,fallback)=>{ const v=parseInt(document.getElementById(id)?.value); return (v>0&&v<=30)?v:fallback; };
 
-  if(!app.r1dl) add('▶ Start Round 1 (3 days)', async()=>{
-    const d=new Date(); d.setDate(d.getDate()+3); app.r1dl=d.toISOString();
-    await writeState(); await loadSheet(); toast('Round 1 started — 3 days!'); closeAdmin();
+  if(!app.r1dl) add('▶ Start Round 1', async()=>{
+    const days=durDays('dur-r1',3);
+    const d=new Date(); d.setDate(d.getDate()+days); app.r1dl=d.toISOString();
+    await writeState(); await loadSheet(); toast(`Round 1 started — ${days} day${days!==1?'s':''}!`); closeAdmin();
   });
 
   if(app.r1dl&&!app.r2open) add('⭐ Advance to Round 2', async()=>{
@@ -978,9 +994,10 @@ function renderAdminActions() {
     });
     app.recipes.forEach(r=>{ r.finalist2=nominees.has(r.id); });
     app.r2open=true;
-    const d=new Date(); d.setDate(d.getDate()+2); app.r2dl=d.toISOString();
+    const days=durDays('dur-r2',2);
+    const d=new Date(); d.setDate(d.getDate()+days); app.r2dl=d.toISOString();
     await writeAllRecipes(); await writeState(); await loadSheet();
-    toast(`${nominees.size} recipes advanced to Round 2 ⭐`); closeAdmin();
+    toast(`${nominees.size} recipes advanced to Round 2 ⭐ — ${days} day${days!==1?'s':''}`); closeAdmin();
   });
 
   if(app.r2open&&!app.r3open) add('🏆 Advance to Round 3 (Final)', async()=>{
@@ -988,14 +1005,16 @@ function renderAdminActions() {
     const top=new Set(ranked.slice(0,FINALISTS).map(r=>r.id));
     app.recipes.forEach(r=>{ r.finalist3=top.has(r.id); });
     app.r3open=true;
-    const d=new Date(); d.setDate(d.getDate()+1); app.r3dl=d.toISOString();
+    const days=durDays('dur-r3',1);
+    const d=new Date(); d.setDate(d.getDate()+days); app.r3dl=d.toISOString();
     await writeAllRecipes(); await writeState(); await loadSheet();
-    toast(`Top ${FINALISTS} advance to the Final 🏆`); closeAdmin();
+    toast(`Top ${FINALISTS} advance to the Final 🏆 — ${days} day${days!==1?'s':''}`); closeAdmin();
   });
 
-  if(app.r1dl) add('⏱ Restart R1 timer (3d)', async()=>{
-    const d=new Date(); d.setDate(d.getDate()+3); app.r1dl=d.toISOString();
-    await writeState(); tickTimers(); toast('Round 1 timer restarted'); closeAdmin();
+  if(app.r1dl) add('⏱ Restart R1 timer', async()=>{
+    const days=durDays('dur-r1',3);
+    const d=new Date(); d.setDate(d.getDate()+days); app.r1dl=d.toISOString();
+    await writeState(); tickTimers(); toast(`Round 1 timer restarted — ${days}d`); closeAdmin();
   });
   if(app.r1dl && new Date(app.r1dl)>Date.now()) add('⏹ Stop R1 timer now', async()=>{
     if(!confirm('End Round 1 voting immediately?')) return;
@@ -1003,9 +1022,10 @@ function renderAdminActions() {
     await writeState(); tickTimers(); toast('Round 1 timer stopped'); closeAdmin();
   }, true);
 
-  if(app.r2open) add('⏱ Restart R2 timer (2d)', async()=>{
-    const d=new Date(); d.setDate(d.getDate()+2); app.r2dl=d.toISOString();
-    await writeState(); tickTimers(); toast('Round 2 timer restarted'); closeAdmin();
+  if(app.r2open) add('⏱ Restart R2 timer', async()=>{
+    const days=durDays('dur-r2',2);
+    const d=new Date(); d.setDate(d.getDate()+days); app.r2dl=d.toISOString();
+    await writeState(); tickTimers(); toast(`Round 2 timer restarted — ${days}d`); closeAdmin();
   });
   if(app.r2open && new Date(app.r2dl)>Date.now()) add('⏹ Stop R2 timer now', async()=>{
     if(!confirm('End Round 2 voting immediately?')) return;
@@ -1013,9 +1033,10 @@ function renderAdminActions() {
     await writeState(); tickTimers(); toast('Round 2 timer stopped'); closeAdmin();
   }, true);
 
-  if(app.r3open) add('⏱ Restart R3 timer (1d)', async()=>{
-    const d=new Date(); d.setDate(d.getDate()+1); app.r3dl=d.toISOString();
-    await writeState(); tickTimers(); toast('Round 3 timer restarted'); closeAdmin();
+  if(app.r3open) add('⏱ Restart R3 timer', async()=>{
+    const days=durDays('dur-r3',1);
+    const d=new Date(); d.setDate(d.getDate()+days); app.r3dl=d.toISOString();
+    await writeState(); tickTimers(); toast(`Round 3 timer restarted — ${days}d`); closeAdmin();
   });
   if(app.r3open && new Date(app.r3dl)>Date.now()) add('⏹ Stop R3 timer now', async()=>{
     if(!confirm('End Round 3 voting immediately? Winners will be finalized.')) return;
