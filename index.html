@@ -435,8 +435,7 @@ h1,h2,h3,h4 { font-family: 'DM Serif Display', serif; }
 // ═══════════════════════════════════════════════════════════
 // CONFIG — REPLACE THESE THREE VALUES
 // ═══════════════════════════════════════════════════════════
-const SHEET_ID   = 'YOUR_SHEET_ID_HERE';
-const API_KEY    = 'YOUR_API_KEY_HERE';
+const SCRIPT_URL = 'YOUR_SCRIPT_URL_HERE';
 const ADMIN_PIN  = 'YOUR_ADMIN_PIN_HERE';
 
 // ═══════════════════════════════════════════════════════════
@@ -534,19 +533,27 @@ function showScreen(id) {
 // GOOGLE SHEETS
 // ═══════════════════════════════════════════════════════════
 const sheetGet = range =>
-  fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?key=${API_KEY}`).then(r=>r.json());
+  fetch(`${SCRIPT_URL}?range=${encodeURIComponent(range)}`).then(r=>r.json());
 
-const sheetWrite = (range, values) =>
-  fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate?key=${API_KEY}`, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({valueInputOption:'RAW', data:[{range,values}]})
+const sheetWrite = async (range, values) => {
+  const r = await fetch(SCRIPT_URL, {
+    method:'POST', headers:{'Content-Type':'text/plain'},
+    body: JSON.stringify({action:'write', range, values})
   });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error||'write failed');
+  return j;
+};
 
-const sheetAppend = (range, values) =>
-  fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS&key=${API_KEY}`, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({values})
+const sheetAppend = async (range, values) => {
+  const r = await fetch(SCRIPT_URL, {
+    method:'POST', headers:{'Content-Type':'text/plain'},
+    body: JSON.stringify({action:'append', range, values})
   });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error||'append failed');
+  return j;
+};
 
 function setSyncStatus(state, msg) {
   document.getElementById('sdot').className = 'sdot ' + state;
@@ -905,6 +912,19 @@ function renderAdminActions() {
     const d=new Date(); d.setDate(d.getDate()+1); app.r3dl=d.toISOString();
     await writeAllRecipes(); await writeState(); await loadSheet();
     toast(`Top ${FINALISTS} advance to the Final 🏆`); closeAdmin();
+  });
+
+  if(app.r1dl) add('⏱ Restart R1 timer (3d)', async()=>{
+    const d=new Date(); d.setDate(d.getDate()+3); app.r1dl=d.toISOString();
+    await writeState(); tickTimers(); toast('Round 1 timer restarted'); closeAdmin();
+  });
+  if(app.r2open) add('⏱ Restart R2 timer (2d)', async()=>{
+    const d=new Date(); d.setDate(d.getDate()+2); app.r2dl=d.toISOString();
+    await writeState(); tickTimers(); toast('Round 2 timer restarted'); closeAdmin();
+  });
+  if(app.r3open) add('⏱ Restart R3 timer (1d)', async()=>{
+    const d=new Date(); d.setDate(d.getDate()+1); app.r3dl=d.toISOString();
+    await writeState(); tickTimers(); toast('Round 3 timer restarted'); closeAdmin();
   });
 
   add('↺ Reset All Votes', async()=>{
