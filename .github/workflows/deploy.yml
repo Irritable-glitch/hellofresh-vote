@@ -1,10 +1,8 @@
 name: Deploy with Secrets
-
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -15,29 +13,24 @@ jobs:
       contents: write
       pages: write
       id-token: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Inject secrets into index.html
         env:
           SCRIPT_URL: ${{ secrets.FOOD_SCRIPT_URL }}
           ADMIN_PIN:  ${{ secrets.FOOD_ADMIN_PIN }}
         run: |
-          cp index.html
+          test -f index.html || { echo "index.html not found"; exit 1; }
           sed -i "s|YOUR_SCRIPT_URL_HERE|${SCRIPT_URL}|g" index.html
           sed -i "s|YOUR_ADMIN_PIN_HERE|${ADMIN_PIN}|g"   index.html
           echo "✓ Secrets injected"
-
       - name: Setup Pages
         uses: actions/configure-pages@v4
-
       - name: Upload to Pages
         uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
-
       - name: Deploy to Pages
         id: deployment
         uses: actions/deploy-pages@v4
