@@ -671,7 +671,7 @@ async function loadSheet() {
       id: parseInt(r[0])||0, name:r[1]||'', category:r[2]||'Other',
       prepTime:r[3]||'', difficulty:r[4]||'', image:r[5]||'',
       url:r[6]||'', description:r[7]||'',
-      finalist2: r[8]==='true', finalist3: r[9]==='true',
+      finalist2: r[8]===true||r[8]==='true'||r[8]==='TRUE', finalist3: r[9]===true||r[9]==='true'||r[9]==='TRUE',
     })).filter(r=>r.id&&r.name);
 
     if (sheetRecipes.length) {
