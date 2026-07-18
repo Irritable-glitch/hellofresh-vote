@@ -214,6 +214,8 @@ h1,h2,h3,h4 { font-family: 'DM Serif Display', serif; }
 .mp-tips li::before { content: "💡"; position: absolute; left: 0; font-size: 0.8rem; }
 .mp-note { font-size: 0.72rem; color: var(--sub); margin-top: 0.8rem; }
 .mp-loading { text-align: center; padding: 2rem; color: var(--sub); font-size: 0.9rem; }
+.mp-card .mp-head { align-items: flex-start; }
+@media (max-width: 480px) { .mp-card .mp-head { flex-direction: column; align-items: stretch; } }
 .mp-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 @media (max-width: 720px) { .mp-grid2 { grid-template-columns: 1fr; } }
 .download-note { font-size: 0.78rem; color: #bbb; }
@@ -1183,6 +1185,7 @@ async function downloadWinnerPDF(recipe) {
 let planWinners = [];        // set by renderR3
 let planOpen = false;
 let planServings = 4;
+let planExportData = null;   // {servings, recipes:[{name,ings}], combined, grand, grandPantry} — for export/copy
 const planCache = {};        // url -> {ok, yields:{2:[],4:[]}, base:{n,ings}, name}
 
 // ---- approximate US grocery prices ----
@@ -1459,6 +1462,7 @@ function renderMealPlan() {
     `<button class="${n===planServings?'on':''}" onclick="setPlanServings(${n})">${n}</button>`).join('');
 
   let recipesHtml = '', combined = [], tips = [], grand = 0, grandPantry = 0, pantryNames = new Set();
+  const exportRecipes = [];   // {name, ings:[{name,dispAmt,dispUnit,cost,pantry}], sub}
 
   datas.forEach(d => {
     if (!d.ok) {
@@ -1467,6 +1471,7 @@ function renderMealPlan() {
     }
     const ings = scaleIngredients(d, planServings);
     let sub = 0, subPantry = 0, rows = '';
+    const exportIngs = [];
     ings.forEach(i => {
       const isPantry = PANTRY_RE.test(i.name.trim());
       const pr = priceFor(i);
@@ -1474,6 +1479,7 @@ function renderMealPlan() {
       else sub += pr.cost;
       if (pr.swap && !isPantry && pr.cost > 3) tips.push(pr.swap);
       rows += `<tr class="${isPantry?'pantry':''}"><td>${escHtml(i.name)}${isPantry?'<span class="tag">pantry</span>':''}</td><td class="amt">${fmtAmt(i.dispAmt)} ${escHtml(i.dispUnit)}</td><td class="cost">${isPantry?'—':'~'+fmt$(pr.cost)}</td></tr>`;
+      exportIngs.push({name:i.name, dispAmt:i.dispAmt, dispUnit:i.dispUnit, cost:pr.cost, pantry:isPantry});
       // merge into combined list
       if (!isPantry) {
         const hit = combined.find(c => c.name.toLowerCase()===i.name.toLowerCase() && c.dispUnit===i.dispUnit);
@@ -1482,6 +1488,7 @@ function renderMealPlan() {
       }
     });
     grand += sub; grandPantry += subPantry;
+    exportRecipes.push({name: d.name, ings: exportIngs, sub});
     recipesHtml += `<div class="mp-card mp-recipe"><h4>${escHtml(d.name)}</h4>
       <table class="mp-table">${rows}</table>
       <div class="mp-total"><span class="big">~${fmt$(sub*0.8)}–${fmt$(sub*1.2)}</span><span class="sub">for ${planServings} servings · pantry staples excluded</span></div>
@@ -1499,6 +1506,13 @@ function renderMealPlan() {
     .sort((a,b)=>a.name.localeCompare(b.name))
     .map(i=>`<tr><td>${escHtml(i.name)}${i.shared?' <span style="font-size:0.65rem;color:var(--green);font-weight:700">×2 recipes</span>':''}</td><td class="amt">${fmtAmt(i.dispAmt)} ${escHtml(i.dispUnit)}</td><td class="cost">~${fmt$(priceFor(i).cost)}</td></tr>`).join('');
 
+  planExportData = {
+    servings: planServings,
+    recipes: exportRecipes,
+    combined: combined.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(i=>({name:i.name, dispAmt:i.dispAmt, dispUnit:i.dispUnit, cost:priceFor(i).cost, shared:!!i.shared})),
+    grand, grandPantry, pantryNames:[...pantryNames],
+  };
+
   el.innerHTML = `
     <div class="mp-card">
       <div class="mp-head">
@@ -1509,7 +1523,13 @@ function renderMealPlan() {
     </div>
     <div class="mp-grid2">${recipesHtml}</div>
     <div class="mp-card">
-      <h4 style="margin-bottom:0.5rem">Combined shopping list — both meals</h4>
+      <div class="mp-head">
+        <h4 style="margin-bottom:0">Combined shopping list — both meals</h4>
+        <div style="display:flex;gap:0.5rem">
+          <button onclick="copyShoppingList()" style="background:var(--mist);border:1.5px solid var(--rule);border-radius:8px;padding:0.4rem 0.8rem;font-size:0.78rem;font-weight:700;cursor:pointer;font-family:inherit">📋 Copy list</button>
+          <button onclick="downloadShoppingList()" style="background:var(--night);border:none;color:white;border-radius:8px;padding:0.4rem 0.8rem;font-size:0.78rem;font-weight:700;cursor:pointer;font-family:inherit">⬇ Download .txt</button>
+        </div>
+      </div>
       <table class="mp-table">${combinedRows}</table>
       <div class="mp-total">
         <span class="big">~${fmt$(grand*0.8)}–${fmt$(grand*1.2)}</span>
@@ -1519,6 +1539,67 @@ function renderMealPlan() {
     </div>
     ${tipsHtml?`<div class="mp-card"><h4 style="margin-bottom:0.6rem">Suggestions</h4><ul class="mp-tips">${tipsHtml}</ul></div>`:''}
     <p class="mp-note">💲 Costs are rough estimates from average US grocery prices — actual prices vary by store, brand, and region. Amounts for 2 & 4 servings come straight from HelloFresh; 6 & 8 are combinations of those portions.</p>`;
+}
+
+// ---- export: build a clean plain-text version, then copy or download ----
+function buildShoppingListText() {
+  const d = planExportData;
+  if (!d) return '';
+  const lines = [];
+  lines.push(`🛒 SHOPPING LIST — ${d.servings} servings per meal`);
+  lines.push(new Date().toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric'}));
+  lines.push('');
+  d.recipes.forEach(r => {
+    lines.push(`— ${r.name} —`);
+    r.ings.forEach(i => {
+      const amt = i.dispAmt > 0 ? `${fmtAmt(i.dispAmt)} ${i.dispUnit}`.trim() : 'to taste';
+      lines.push(`  [ ] ${amt} ${i.name}${i.pantry ? ' (pantry — probably on hand)' : ''}`);
+    });
+    lines.push(`  Subtotal: ~${fmt$(r.sub)}`);
+    lines.push('');
+  });
+  lines.push('— COMBINED SHOPPING LIST —');
+  d.combined.forEach(i => {
+    const amt = `${fmtAmt(i.dispAmt)} ${i.dispUnit}`.trim();
+    lines.push(`[ ] ${amt} ${i.name}${i.shared ? '  (used in both meals)' : ''}`);
+  });
+  lines.push('');
+  lines.push(`ESTIMATED TOTAL: ~${fmt$(d.grand*0.8)}–${fmt$(d.grand*1.2)}`);
+  if (d.grandPantry > 0.5) lines.push(`  (+ ~${fmt$(d.grandPantry)} if you need pantry staples too)`);
+  if (d.pantryNames.length) lines.push(`Likely already on hand: ${d.pantryNames.join(', ').toLowerCase()}`);
+  lines.push('');
+  lines.push('Costs are rough estimates from average US grocery prices.');
+  return lines.join('\n');
+}
+
+async function copyShoppingList() {
+  const text = buildShoppingListText();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('✓ Copied — paste into Notes, Keep, or a text ✉️');
+  } catch {
+    // Fallback for browsers/contexts without clipboard API (e.g. non-HTTPS)
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('✓ Copied — paste into Notes, Keep, or a text ✉️'); }
+    catch { toast('⚠ Copy failed — try Download .txt instead'); }
+    document.body.removeChild(ta);
+  }
+}
+
+function downloadShoppingList() {
+  const text = buildShoppingListText();
+  if (!text) return;
+  const stamp = new Date().toISOString().slice(0,10);
+  const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `shopping-list-${stamp}.txt`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  toast('✓ Downloaded shopping-list.txt');
 }
 
 async function saveWinnerUrls(winners) {
