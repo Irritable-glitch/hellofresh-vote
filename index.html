@@ -577,6 +577,19 @@ async function refreshVotersFromSheet() {
   }
 }
 
+// Robust recipe matching — Sheet URLs and recipes.json URLs don't always match
+// exactly (trailing slash, older scrape format, blank). Match on any of:
+// normalized URL, the 24-char HelloFresh id embedded in the URL, or the name.
+function hfIdOf(u){ const m=String(u||'').match(/[0-9a-f]{24}/i); return m?m[0].toLowerCase():''; }
+function normUrlOf(u){ return String(u||'').trim().toLowerCase().replace(/[?#].*$/,'').replace(/\/+$/,''); }
+function recKeysOf(r){ return [normUrlOf(r.url), hfIdOf(r.url), (r.name||'').trim().toLowerCase()].filter(Boolean); }
+function buildEnrichIndex(scraped){
+  const idx = {};
+  (scraped||[]).forEach(s => { if (s.ing || s.pdfUrl || s.time || s.diff) recKeysOf(s).forEach(k => { if(!idx[k]) idx[k]=s; }); });
+  return idx;
+}
+function findEnrichment(r, idx){ for (const k of recKeysOf(r)) if (idx[k]) return idx[k]; return null; }
+
 async function loadRecipesJSON() {
   // Load from recipes.json in the same folder as index.html
   try {
@@ -590,6 +603,7 @@ async function loadRecipesJSON() {
         difficulty: r.difficulty || r.diff || '', description: r.description || '',
         url: r.url || r.hfUrl || '', finalist2: false, finalist3: false,
         pdfUrl: r.pdfUrl || '', ing: r.ing || null,   // offline enrichment (enrich_recipes.py)
+        time: r.time || '', diff: r.diff || '',        // real prep time / difficulty
       }));
       // Store as base; sheet data will overlay votes and finalist flags
       app._scraped = scraped;
@@ -707,15 +721,23 @@ async function loadSheet() {
 
     if (sheetRecipes.length) {
       app.recipes = sheetRecipes;
-      // Overlay offline enrichment (ingredients + PDF url) from recipes.json onto
-      // sheet recipes — the sheet only stores 10 columns, so these live client-side.
+      // Overlay offline enrichment (ingredients, PDF url, real time/difficulty)
+      // from recipes.json onto sheet recipes — the sheet only stores 10 columns,
+      // so these live client-side. Matched by URL / HF-id / name for resilience.
       if (app._scraped?.length) {
-        const enrich = {};
-        app._scraped.forEach(s => { if (s.url && (s.ing || s.pdfUrl)) enrich[s.url] = s; });
+        const idx = buildEnrichIndex(app._scraped);
+        let hits = 0;
         app.recipes.forEach(r => {
-          const e = enrich[r.url];
-          if (e) { r.ing = e.ing || null; r.pdfUrl = e.pdfUrl || ''; }
+          const e = findEnrichment(r, idx);
+          if (e) {
+            hits++;
+            if (e.ing) r.ing = e.ing;
+            if (e.pdfUrl) r.pdfUrl = e.pdfUrl;
+            if (e.time) r.prepTime = e.time;
+            if (e.diff) r.difficulty = e.diff;
+          }
         });
+        console.log(`enrichment overlaid onto ${hits}/${app.recipes.length} recipes`);
       }
       // Merge in any NEW recipes from recipes.json not already in the sheet
       // (matched by HelloFresh URL, since ids can collide across scrapes)
@@ -1002,7 +1024,7 @@ function renderR1() {
   if(q) list=list.filter(r=>r.name.toLowerCase().includes(q));
   const grid = document.getElementById('g1');
   if(!list.length){ grid.innerHTML=`<div class="empty"><div class="ico">🍽</div><p>No recipes yet. ${isAdmin?'Add recipes manually or run scrape_recipes.py and upload recipes.json.':'Check back soon!'}</p></div>`; return; }
-  grid.innerHTML = list.map(r=>cardHTML(r,1)).join('');
+  grid.innerHTML = list.map(r=>cardHTML(r,1)).join(''); pruneReadMoreHints();
 }
 
 function renderR2() {
@@ -1011,7 +1033,7 @@ function renderR2() {
   if(!app.r2open) return;
   const q=(document.getElementById('s2').value||'').toLowerCase();
   const list=app.recipes.filter(r=>r.finalist2&&r.name.toLowerCase().includes(q));
-  document.getElementById('g2').innerHTML=list.map(r=>cardHTML(r,2)).join('');
+  document.getElementById('g2').innerHTML=list.map(r=>cardHTML(r,2)).join(''); pruneReadMoreHints();
 }
 
 function renderR3() {
@@ -1019,7 +1041,7 @@ function renderR3() {
   document.getElementById('r3open').style.display = app.r3open?'block':'none';
   if(!app.r3open) return;
   const finalists=app.recipes.filter(r=>r.finalist3);
-  document.getElementById('g3').innerHTML=finalists.map(r=>cardHTML(r,3)).join('');
+  document.getElementById('g3').innerHTML=finalists.map(r=>cardHTML(r,3)).join(''); pruneReadMoreHints();
   // Winners — top 2, plus a 3rd if it TIES the 2nd-place vote count
   const sorted=[...finalists].sort((a,b)=>yesCount(b.id,app.r3v)-yesCount(a.id,app.r3v));
   let winners=sorted.slice(0,WINNERS).filter(r=>yesCount(r.id,app.r3v)>0);
@@ -1110,7 +1132,12 @@ async function downloadWinnerPDF(recipe) {
   try {
     // Prefer the pre-scraped PDF url (recipes.json enrichment); fall back to
     // scraping the recipe page — which may fail due to HelloFresh bot detection.
-    let pdfUrl = recipe.pdfUrl || await findPdfUrlOnPage(recipe.url);
+    let pdfUrl = recipe.pdfUrl;
+    if (!pdfUrl && app._scraped?.length) {
+      const e = findEnrichment({name:recipe.name, url:recipe.url}, buildEnrichIndex(app._scraped));
+      if (e && e.pdfUrl) pdfUrl = e.pdfUrl;
+    }
+    if (!pdfUrl) pdfUrl = await findPdfUrlOnPage(recipe.url);
 
     if (!pdfUrl) {
       toast('⚠ Could not find PDF link — opening recipe page instead');
@@ -1377,8 +1404,14 @@ const fmt$ = v => '$' + v.toFixed(2);
 
 async function loadRecipePlan(w) {
   if (planCache[w.url]) return planCache[w.url];
-  // 1) Prefer pre-scraped data from recipes.json (works offline, no bot detection)
-  const rec = app.recipes.find(r => r.url === w.url);
+  // 1) Prefer pre-scraped data from recipes.json (works offline, no bot detection).
+  // Look on the recipe itself, and fall back to a direct enrichment lookup in case
+  // the overlay missed (URL/name mismatch between Sheet and recipes.json).
+  let rec = app.recipes.find(r => r.url === w.url) || {name:w.name, url:w.url};
+  if (!(rec.ing && (rec.ing.y2 || rec.ing.y4)) && app._scraped?.length) {
+    const e = findEnrichment({name:w.name, url:w.url}, buildEnrichIndex(app._scraped));
+    if (e) rec = e;
+  }
   if (rec && rec.ing && (rec.ing.y2 || rec.ing.y4)) {
     const conv = list => (list||[]).map(([name, amount, unit]) => {
       const n = normUnit(amount, unit);
@@ -1552,7 +1585,7 @@ function cardHTML(r, round) {
         <div class="rcard-desc" id="desc-${r.id}">${r.description}</div>
         <span class="expand-hint" id="hint-${r.id}">Tap to read more ↓</span>
       `:''}
-      ${r.url?`<a class="rcard-hf-link" id="link-${r.id}" href="${r.url}" target="_blank" onclick="event.stopPropagation()">View on HelloFresh ↗</a>`:''}
+      ${r.url?`<a class="rcard-hf-link visible" id="link-${r.id}" href="${r.url}" target="_blank" onclick="event.stopPropagation()">View on HelloFresh ↗</a>`:''}
     </div>
     <div class="rcard-foot">
       <div class="vote-faces">${faces}</div>
@@ -1562,6 +1595,20 @@ function cardHTML(r, round) {
       </div>
     </div>
   </div>`;
+}
+
+// Hide the "Tap to read more" hint on cards whose description already fits —
+// otherwise tapping appears to do nothing. Runs after each grid render.
+function pruneReadMoreHints() {
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.rcard-desc').forEach(desc => {
+      if (desc.classList.contains('expanded')) return;
+      const overflowing = desc.scrollHeight > desc.clientHeight + 2;
+      const id = desc.id.replace('desc-', '');
+      const hint = document.getElementById('hint-' + id);
+      if (hint) hint.style.display = overflowing ? 'inline-block' : 'none';
+    });
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
