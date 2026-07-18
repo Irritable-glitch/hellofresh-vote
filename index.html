@@ -589,6 +589,7 @@ async function loadRecipesJSON() {
         image: r.image || r.img || '', prepTime: r.prepTime || r.time || '',
         difficulty: r.difficulty || r.diff || '', description: r.description || '',
         url: r.url || r.hfUrl || '', finalist2: false, finalist3: false,
+        pdfUrl: r.pdfUrl || '', ing: r.ing || null,   // offline enrichment (enrich_recipes.py)
       }));
       // Store as base; sheet data will overlay votes and finalist flags
       app._scraped = scraped;
@@ -706,6 +707,16 @@ async function loadSheet() {
 
     if (sheetRecipes.length) {
       app.recipes = sheetRecipes;
+      // Overlay offline enrichment (ingredients + PDF url) from recipes.json onto
+      // sheet recipes — the sheet only stores 10 columns, so these live client-side.
+      if (app._scraped?.length) {
+        const enrich = {};
+        app._scraped.forEach(s => { if (s.url && (s.ing || s.pdfUrl)) enrich[s.url] = s; });
+        app.recipes.forEach(r => {
+          const e = enrich[r.url];
+          if (e) { r.ing = e.ing || null; r.pdfUrl = e.pdfUrl || ''; }
+        });
+      }
       // Merge in any NEW recipes from recipes.json not already in the sheet
       // (matched by HelloFresh URL, since ids can collide across scrapes)
       if (app._scraped?.length) {
@@ -1009,16 +1020,22 @@ function renderR3() {
   if(!app.r3open) return;
   const finalists=app.recipes.filter(r=>r.finalist3);
   document.getElementById('g3').innerHTML=finalists.map(r=>cardHTML(r,3)).join('');
-  // Winners
+  // Winners — top 2, plus a 3rd if it TIES the 2nd-place vote count
   const sorted=[...finalists].sort((a,b)=>yesCount(b.id,app.r3v)-yesCount(a.id,app.r3v));
-  const winners=sorted.slice(0,WINNERS).filter(r=>yesCount(r.id,app.r3v)>0);
+  let winners=sorted.slice(0,WINNERS).filter(r=>yesCount(r.id,app.r3v)>0);
+  if(winners.length>=WINNERS){
+    const cutoff=yesCount(winners[WINNERS-1].id,app.r3v);
+    sorted.slice(WINNERS).forEach(r=>{ if(yesCount(r.id,app.r3v)===cutoff) winners.push(r); });
+  }
   const bar=document.getElementById('winner-bar');
   if(winners.length>=WINNERS){
     bar.style.display='flex';
-    document.getElementById('wpills').innerHTML=winners.map(r=>`
-      <div class="wpill" style="display:flex;align-items:center;gap:0.5rem">
-        <span>🏆 ${r.name}</span>
-        <button onclick='downloadWinnerPDF(${JSON.stringify({id:r.id,name:r.name,url:r.url}).replace(/'/g,"&#39;")})'
+    const tied = winners.length>WINNERS;
+    bar.querySelector('h3').textContent = tied ? `🏆 Top 2 confirmed — plus a tie for 2nd!` : `🏆 This week's meals are confirmed!`;
+    document.getElementById('wpills').innerHTML=winners.map((r,i)=>`
+      <div class="wpill" style="display:flex;align-items:center;gap:0.5rem${i>=WINNERS?';outline:1.5px dashed rgba(255,255,255,0.4)':''}">
+        <span>${i>=WINNERS?'🤝':'🏆'} ${r.name}${i>=WINNERS?' <span style="font-size:0.68rem;opacity:0.8">(tied)</span>':''}</span>
+        <button onclick='downloadWinnerPDF(${JSON.stringify({id:r.id,name:r.name,url:r.url,pdfUrl:r.pdfUrl||''}).replace(/'/g,"&#39;")})'
           style="background:rgba(255,255,255,0.2);border:none;border-radius:6px;padding:0.25rem 0.6rem;font-size:0.72rem;color:white;font-family:inherit;font-weight:700;cursor:pointer">📄 Download PDF</button>
       </div>`).join('');
     planWinners = winners.map(r=>({id:r.id,name:r.name,url:r.url}));
@@ -1091,8 +1108,9 @@ async function findPdfUrlOnPage(recipePageUrl) {
 async function downloadWinnerPDF(recipe) {
   toast(`Finding PDF for "${recipe.name}"…`);
   try {
-    // Recipe.url is the page URL — find the actual PDF link on that page
-    let pdfUrl = await findPdfUrlOnPage(recipe.url);
+    // Prefer the pre-scraped PDF url (recipes.json enrichment); fall back to
+    // scraping the recipe page — which may fail due to HelloFresh bot detection.
+    let pdfUrl = recipe.pdfUrl || await findPdfUrlOnPage(recipe.url);
 
     if (!pdfUrl) {
       toast('⚠ Could not find PDF link — opening recipe page instead');
@@ -1149,7 +1167,7 @@ const PRICE_TABLE = [
   {m:/ground beef|beef mince/i, per:'oz', p:0.35},
   {m:/ground turkey/i,  per:'oz', p:0.30},
   {m:/ground pork/i,    per:'oz', p:0.28},
-  {m:/steak|sirloin|ribeye|flank/i, per:'oz', p:0.75, swap:'swap steak for ground beef to halve the protein cost'},
+  {m:/steak|sirloin|ribeye|flank|tenderloin|filet/i, per:'oz', p:0.85, swap:'swap steak cuts for ground beef to halve the protein cost'},
   {m:/pork (chop|tenderloin|loin)/i, per:'oz', p:0.35},
   {m:/bacon/i,          per:'oz', p:0.50},
   {m:/sausage|chorizo/i, per:'oz', p:0.35},
@@ -1338,12 +1356,13 @@ function scaleIngredients(data, servings) {
 
 function priceFor(ing) {
   const entry = PRICE_TABLE.find(e => e.m.test(ing.name));
-  const per = entry ? entry.per : ing.cu;
-  const p = entry ? entry.p : (PRICE_DEFAULT[ing.cu] ?? 0.40);
-  // if table prices per different unit than we measured, fall back to measured unit default
-  const usable = !entry || entry.per === ing.cu;
-  const unitPrice = usable ? p : (PRICE_DEFAULT[ing.cu] ?? 0.40);
-  return {cost: Math.max(0.05, ing.qty * unitPrice), swap: entry?.swap, exact: !!entry && usable};
+  if (!entry) return {cost: Math.max(0.05, ing.qty * (PRICE_DEFAULT[ing.cu] ?? 0.40))};
+  // convert measured qty into the table's pricing unit where possible
+  let qty = ing.qty, ok = entry.per === ing.cu;
+  if (!ok && entry.per==='oz' && ing.cu==='tsp') { qty = ing.qty/6; ok = true; }   // 6 tsp = 1 fl oz
+  if (!ok && entry.per==='tsp' && ing.cu==='oz') { qty = ing.qty*6; ok = true; }
+  const unitPrice = ok ? entry.p : (PRICE_DEFAULT[ing.cu] ?? 0.40);
+  return {cost: Math.max(0.05, qty * unitPrice), swap: entry.swap, exact: ok};
 }
 
 function fmtAmt(v) {
@@ -1358,6 +1377,21 @@ const fmt$ = v => '$' + v.toFixed(2);
 
 async function loadRecipePlan(w) {
   if (planCache[w.url]) return planCache[w.url];
+  // 1) Prefer pre-scraped data from recipes.json (works offline, no bot detection)
+  const rec = app.recipes.find(r => r.url === w.url);
+  if (rec && rec.ing && (rec.ing.y2 || rec.ing.y4)) {
+    const conv = list => (list||[]).map(([name, amount, unit]) => {
+      const n = normUnit(amount, unit);
+      return {name, qty:n.qty, cu:n.cu, dispAmt:Number(amount)||0, dispUnit:unit||''};
+    });
+    const yields = {};
+    if (rec.ing.y2) yields[2] = conv(rec.ing.y2);
+    if (rec.ing.y4) yields[4] = conv(rec.ing.y4);
+    const data = {ok:true, yields, name:w.name};
+    planCache[w.url] = data;
+    return data;
+  }
+  // 2) Fall back to live fetch (often blocked by HelloFresh bot detection)
   const html = await fetchTextViaProxy(w.url);
   const data = html ? parseRecipePage(html) : {ok:false};
   data.name = w.name;
@@ -1395,7 +1429,7 @@ function renderMealPlan() {
 
   datas.forEach(d => {
     if (!d.ok) {
-      recipesHtml += `<div class="mp-card mp-recipe"><h4>${escHtml(d.name)}</h4><p style="font-size:0.84rem;color:var(--sub)">Couldn't read the ingredient list for this one — open the recipe page for details.</p></div>`;
+      recipesHtml += `<div class="mp-card mp-recipe"><h4>${escHtml(d.name)}</h4><p style="font-size:0.84rem;color:var(--sub)">Ingredient data isn't available for this recipe yet — run <b>enrich_recipes.py</b> and push the updated recipes.json, or open the recipe page for details.</p></div>`;
       return;
     }
     const ings = scaleIngredients(d, planServings);
