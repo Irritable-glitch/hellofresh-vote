@@ -1130,48 +1130,28 @@ async function findPdfUrlOnPage(recipePageUrl) {
 }
 
 async function downloadWinnerPDF(recipe) {
-  toast(`Finding PDF for "${recipe.name}"…`);
   try {
-    // Prefer the pre-scraped PDF url (recipes.json enrichment); fall back to
-    // scraping the recipe page — which may fail due to HelloFresh bot detection.
     let pdfUrl = recipe.pdfUrl;
     if (!pdfUrl && app._scraped?.length) {
       const e = findEnrichment({name:recipe.name, url:recipe.url}, buildEnrichIndex(app._scraped));
       if (e && e.pdfUrl) pdfUrl = e.pdfUrl;
     }
-    if (!pdfUrl) pdfUrl = await findPdfUrlOnPage(recipe.url);
-
-    if (!pdfUrl) {
-      toast('⚠ Could not find PDF link — opening recipe page instead');
-      window.open(recipe.url, '_blank');
-      return;
-    }
-
-    toast(`Downloading "${recipe.name}"…`);
-    const blob = await fetchBlobViaProxy(pdfUrl);
-
-    if (!blob) {
-      toast('⚠ Download failed — opening PDF link directly');
+    if (pdfUrl) {
+      toast(`Opening PDF...`);
       window.open(pdfUrl, '_blank');
       return;
     }
-
-    // Save with the correct recipe name instead of the random HelloFresh ID
-    const filename = sanitizeFilename(recipe.name) + '.pdf';
-    const blobUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = blobUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-
-    toast(`✓ Saved as ${filename}`);
-  } catch (e) {
-    console.error('PDF download error:', e);
-    toast('⚠ Download failed — opening recipe page instead');
+    toast(`Searching recipe page...`);
+    pdfUrl = await findPdfUrlOnPage(recipe.url);
+    if (pdfUrl) {
+      window.open(pdfUrl, '_blank');
+      return;
+    }
+    toast('Opening recipe page instead');
     window.open(recipe.url, '_blank');
+  } catch (e) {
+    console.error('PDF error:', e);
+    toast('Error opening PDF - try HelloFresh link');
   }
 }
 
