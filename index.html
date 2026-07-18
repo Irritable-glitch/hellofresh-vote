@@ -1644,7 +1644,7 @@ function cardHTML(r, round) {
       <div class="rcard-name">${r.name}</div>
       ${r.description?`
         <div class="rcard-desc" id="desc-${r.id}">${r.description}</div>
-        <span class="expand-hint" id="hint-${r.id}">Tap to read more ↓</span>
+        <span class="expand-hint" id="hint-${r.id}" onclick="toggleExpand(event,${r.id})">Tap to read more ↓</span>
       `:''}
       ${r.url?`<a class="rcard-hf-link visible" id="link-${r.id}" href="${r.url}" target="_blank" onclick="event.stopPropagation()">View on HelloFresh ↗</a>`:''}
     </div>
@@ -1658,16 +1658,15 @@ function cardHTML(r, round) {
   </div>`;
 }
 
-// Hide the "Tap to read more" hint on cards whose description already fits —
-// otherwise tapping appears to do nothing. Runs after each grid render.
+// Hide the "Tap to read more" hint on cards whose description already fits.
+// Actually, let's always show it for clarity - users should know they can click to expand.
 function pruneReadMoreHints() {
   requestAnimationFrame(() => {
     document.querySelectorAll('.rcard-desc').forEach(desc => {
-      if (desc.classList.contains('expanded')) return;
-      const overflowing = desc.scrollHeight > desc.clientHeight + 2;
+      // Always show the hint - it's visual feedback that the card is interactive
       const id = desc.id.replace('desc-', '');
       const hint = document.getElementById('hint-' + id);
-      if (hint) hint.style.display = overflowing ? 'inline-block' : 'none';
+      if (hint) hint.style.display = 'inline-block';  // always visible
     });
   });
 }
