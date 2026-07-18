@@ -148,7 +148,7 @@ h1,h2,h3,h4 { font-family: 'DM Serif Display', serif; }
 .bdg.hard { background: var(--red-lt); color: var(--red); }
 .rcard-name { font-size: 1rem; line-height: 1.3; flex: 1; }
 .rcard-desc {
-  font-size: 0.75rem; color: var(--sub); line-height: 1.6;
+  font-size: 0.85rem; color: var(--sub); line-height: 1.6;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; transition: all 0.35s ease; cursor: pointer;
 }
@@ -1055,13 +1055,26 @@ function renderR3() {
   if(winners.length>=WINNERS){
     bar.style.display='flex';
     const tied = winners.length>WINNERS;
-    bar.querySelector('h3').textContent = tied ? `🏆 Top 2 confirmed — plus a tie for 2nd!` : `🏆 This week's meals are confirmed!`;
-    document.getElementById('wpills').innerHTML=winners.map((r,i)=>`
-      <div class="wpill" style="display:flex;align-items:center;gap:0.5rem${i>=WINNERS?';outline:1.5px dashed rgba(255,255,255,0.4)':''}">
-        <span>${i>=WINNERS?'🤝':'🏆'} ${r.name}${i>=WINNERS?' <span style="font-size:0.68rem;opacity:0.8">(tied)</span>':''}</span>
+    const topWinners = winners.slice(0, WINNERS);
+    const runnerUps = winners.slice(WINNERS);
+    bar.querySelector('h3').textContent = `🏆 This week's meals are confirmed!`;
+
+    // Build main winners pills + separate runner-up section if tied
+    const pillHtml = (r, isRunnerUp) => `
+      <div class="wpill" style="display:flex;align-items:center;gap:0.5rem${isRunnerUp?';background:rgba(255,215,0,0.15);border:1.5px dashed rgba(255,215,0,0.6)':''}">
+        <span>${isRunnerUp?'🥉':'🏆'} ${r.name}${isRunnerUp?' <span style="font-size:0.7rem;opacity:0.9;font-weight:700">RUNNER-UP</span>':''}</span>
         <button onclick='downloadWinnerPDF(${JSON.stringify({id:r.id,name:r.name,url:r.url,pdfUrl:r.pdfUrl||''}).replace(/'/g,"&#39;")})'
-          style="background:rgba(255,255,255,0.2);border:none;border-radius:6px;padding:0.25rem 0.6rem;font-size:0.72rem;color:white;font-family:inherit;font-weight:700;cursor:pointer">📄 Download PDF</button>
-      </div>`).join('');
+          style="background:rgba(255,255,255,0.2);border:none;border-radius:6px;padding:0.25rem 0.6rem;font-size:0.75rem;color:white;font-family:inherit;font-weight:700;cursor:pointer">📄 Download PDF</button>
+      </div>`;
+
+    let pillsInnerHTML = topWinners.map(r => pillHtml(r, false)).join('');
+    if (tied) {
+      pillsInnerHTML += `<div style="width:100%;height:1px;background:rgba(255,255,255,0.15);margin:0.4rem 0"></div>`;
+      pillsInnerHTML += `<div style="width:100%;font-size:0.72rem;color:rgba(255,255,255,0.7);font-weight:700;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.2rem">🤝 Tied for 2nd — Runner-Up</div>`;
+      pillsInnerHTML += runnerUps.map(r => pillHtml(r, true)).join('');
+    }
+    document.getElementById('wpills').innerHTML = pillsInnerHTML;
+
     planWinners = winners.map(r=>({id:r.id,name:r.name,url:r.url}));
     saveWinnerUrls(winners);
     if (planOpen) renderMealPlan();
@@ -1600,6 +1613,14 @@ async function saveToHistory(winners) {
   if(_historySaved) return;  // only save once per session
   try {
     const weekLabel = `Week of ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`;
+
+    // Check if this week is already in history — prevent duplicates
+    if (history.some(h => h.week === weekLabel)) {
+      _historySaved = true;
+      console.log('History for this week already saved, skipping duplicate');
+      return;
+    }
+
     const row = [
       weekLabel,
       winners[0]?.name||'',
@@ -1612,6 +1633,12 @@ async function saveToHistory(winners) {
       String(yesCount(winners[1]?.id, app.r3v)||0),
     ];
     await sheetAppend(`${SH.HISTORY}!A:I`,[row]);
+    // Also add to in-memory history so subsequent renderHistory calls show it
+    history.unshift({
+      week: weekLabel,
+      w1name: row[1], w1img: row[2], w1cat: row[3], w1votes: row[4],
+      w2name: row[5], w2img: row[6], w2cat: row[7], w2votes: row[8],
+    });
     _historySaved = true;
     toast('Week saved to History 📖');
   } catch(e) { console.warn('History save failed:', e); }
@@ -1822,6 +1849,58 @@ function renderAdminActions() {
     toast('Ready for a fresh week!'); closeAdmin();
   }, true);
 
+  add('🔄 Start New Voting Week — keep recipes & history', async()=>{
+    if(!confirm('Reset votes and finalists to start next weeks voting. Recipes and history are kept. Continue?')) return;
+    // Reset votes and finalist flags but keep recipes and history
+    app.r1v={}; app.r2v={}; app.r3v={};
+    app.r2open=false; app.r3open=false;
+    app.r1dl=null; app.r2dl=null; app.r3dl=null;
+    app.recipes.forEach(r=>{ r.finalist2=false; r.finalist3=false; });
+    _historySaved = false;  // allow next week's winners to be saved to history
+    await clearVotesSheet();
+    await writeAllRecipes();
+    await writeState();
+    await loadSheet();
+    goRound(1);
+    toast('New voting week started — history preserved 📖');
+    closeAdmin();
+  }, true);
+
+  add('🧹 Clean History — remove duplicate weeks', async()=>{
+    if(!history.length){ toast('History is empty'); return; }
+    // Deduplicate by week label, keeping the LATEST entry (highest vote count)
+    const seen = new Map();
+    history.forEach(h => {
+      const existing = seen.get(h.week);
+      if (!existing) {
+        seen.set(h.week, h);
+      } else {
+        // Keep the one with more votes (assume it's the more complete/final record)
+        const existingVotes = (parseInt(existing.w1votes)||0) + (parseInt(existing.w2votes)||0);
+        const newVotes = (parseInt(h.w1votes)||0) + (parseInt(h.w2votes)||0);
+        if (newVotes > existingVotes) seen.set(h.week, h);
+      }
+    });
+    const cleaned = Array.from(seen.values());
+    const removed = history.length - cleaned.length;
+    if (removed === 0) { toast('No duplicates found in history'); return; }
+    if (!confirm(`Found ${removed} duplicate entries. Clean history down to ${cleaned.length} unique weeks?`)) return;
+
+    // Rewrite History sheet with cleaned data
+    const rows = [['week','w1name','w1img','w1cat','w1votes','w2name','w2img','w2cat','w2votes']];
+    cleaned.forEach(h => {
+      rows.push([h.week, h.w1name||'', h.w1img||'', h.w1cat||'', String(h.w1votes||0),
+                 h.w2name||'', h.w2img||'', h.w2cat||'', String(h.w2votes||0)]);
+    });
+    // Clear existing rows first, then write cleaned data
+    await sheetWrite(`${SH.HISTORY}!A1:I500`, [rows[0], ...Array.from({length:499}, () => ['','','','','','','','',''])]);
+    await sheetWrite(`${SH.HISTORY}!A1:I${rows.length}`, rows);
+    history = cleaned;
+    renderHistory();
+    toast(`Removed ${removed} duplicate ${removed===1?'entry':'entries'} ✓`);
+    closeAdmin();
+  }, true);
+
   add('📋 Export Archive URLs', ()=>{
     if(!archive.length){ toast('Archive is empty — nothing to export'); return; }
     const text = archive.map(a=>a.url).filter(Boolean).join('\n');
@@ -1897,10 +1976,15 @@ function toggleExpand(event, id) {
   // Don't trigger if clicking vote buttons
   if (event.target.closest('.vote-btns')) return;
 
+  // CRITICAL: All three rounds render simultaneously in the DOM (hidden pages).
+  // A recipe that's a finalist has THREE cards with the same id="desc-42".
+  // getElementById returns the FIRST match (in R1, which is hidden), not the
+  // visible one. Find elements RELATIVE to the clicked card instead.
   const card = event.currentTarget.closest('.rcard');
-  const desc = document.getElementById('desc-' + id);
-  const hint = document.getElementById('hint-' + id);
-  const link = document.getElementById('link-' + id);
+  if (!card) return;
+  const desc = card.querySelector('.rcard-desc');
+  const hint = card.querySelector('.expand-hint');
+  const link = card.querySelector('.rcard-hf-link');
 
   if (!desc) return;
 
@@ -1911,13 +1995,11 @@ function toggleExpand(event, id) {
     desc.classList.remove('expanded');
     card.classList.remove('expanded');
     if (hint) { hint.textContent = 'Tap to read more ↓'; }
-    if (link) link.classList.remove('visible');
   } else {
     // Expand
     desc.classList.add('expanded');
     card.classList.add('expanded');
     if (hint) { hint.textContent = 'Tap to collapse ↑'; }
-    if (link) link.classList.add('visible');
     // Smooth scroll card into view
     setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
   }
